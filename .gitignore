@@ -1,0 +1,11 @@
+node_modules/
+out/_*
+out/cards/
+out/07-board.html
+out/07-board.svg
+out/00-check-rooms.png
+src/layers.json
+src/layers_count.txt
+src/walls_dump.txt
+.env
+out/.t_start

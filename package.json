@@ -1,0 +1,16 @@
+{
+  "name": "claude-plan-check",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Claude Code разбирает план квартиры из ЖК: 6 чертежей кодом, сверка площадей, нормы СП 54 и вопросы застройщику",
+  "scripts": {
+    "checks": "node tools/flow.mjs && node tools/checks.mjs",
+    "sheets": "node tools/zones.mjs && node tools/fit.mjs && node tools/sun.mjs && node tools/bubble.mjs && node tools/axo.mjs",
+    "board": "node tools/board.mjs",
+    "all": "npm run checks && npm run sheets && npm run board",
+    "cards": "node tools/cards.mjs out/cards"
+  },
+  "dependencies": { "@resvg/resvg-js": "^2.6.2" }
+}
