@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { P, C, ZONE, fit, planLayer, poly, line, centroid, f1, room } from './lib.mjs';
+import { P, C, ZONE, fit, planLayer, poly, line, centroid, f1, room, bboxOf } from './lib.mjs';
 
 const OUT = resolve(process.argv[2] || "out/cards"); mkdirSync(OUT, { recursive: true });
 const K = JSON.parse(readFileSync(new URL('../out/checks.json', import.meta.url), 'utf8'));
@@ -39,7 +39,17 @@ h1{padding:28px 38px;font-weight:900;font-size:64px;line-height:1.04;letter-spac
 .foot{position:absolute;left:60px;bottom:46px;font-weight:800;font-size:28px}
 .note{position:absolute;right:74px;bottom:46px;font-weight:600;font-size:22px;opacity:.7}`;
 const row = (lv, t, wrap) => `<div class="row box"${wrap ? ' style="white-space:normal;font-size:30px"' : ''}><span class="lv" style="background:${LV[lv][0]};color:${LV[lv][1]}">${lv}</span><span>${esc(t)}</span></div>`;
-const svg = (vb, inner) => `<svg viewBox="${vb.join(' ')}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">${onest(inner)}</svg>`;
+// Кадр чертежа: 'auto' считает рамку по геометрии с запасом; заданный вручную кадр проверяется, и если что-то
+// нарисованное выходит за него, сборка падает. crop: true только для намеренных фрагментов (карточка 4).
+function svg(vb, inner, { crop = false, pad = 3, name = '' } = {}) {
+  const b = bboxOf(inner);
+  if (vb === 'auto') vb = [b[0] - pad, b[1] - pad, b[2] - b[0] + 2 * pad, b[3] - b[1] + 2 * pad];
+  else if (!crop && b) {
+    const [x, y, w, h] = vb, out = [x - b[0], y - b[1], b[2] - (x + w), b[3] - (y + h)].map(v => +v.toFixed(2));
+    if (out.some(v => v > 0.5)) throw new Error(`карточка ${name}: чертёж выходит за кадр на ${out.join(' / ')} (слева, сверху, справа, снизу)`);
+  }
+  return `<svg viewBox="${vb.join(' ')}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">${onest(inner)}</svg>`;
+}
 function card(n, total, { h1, draw, rows = [], extra = '', h1size }) {
   return `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><link href="https://fonts.googleapis.com/css2?family=Onest:wght@500;600;700;800;900&display=swap" rel="stylesheet"><style>${CSS}</style></head><body>
 <div class="col"><div class="top"><div class="tag box">Claude Code · план из ЖК</div><div class="pg">${n} / ${total}</div></div>
@@ -49,26 +59,35 @@ function card(n, total, { h1, draw, rows = [], extra = '', h1size }) {
 const T = (x, y, s, o = {}) => `<text x="${x}" y="${y}" font-family="Onest" font-size="${o.size || 5}" font-weight="${o.w || 700}" fill="${o.fill || '#000'}" text-anchor="${o.a || 'middle'}"${o.stroke ? ` stroke="#fff" stroke-width="${o.stroke}" paint-order="stroke"` : ''}>${esc(s)}</text>`;
 
 // ---------- 1. обложка: аксонометрия из листа /axo ----------
-let axo = readFileSync(new URL('../out/01-axo.svg', import.meta.url), 'utf8');
+let axo = readFileSync(new URL('../out/01-axo.body.svg', import.meta.url), 'utf8');
 axo = axo.replace(/<svg[^>]*>/, '').replace('</svg>', '');
 for (const [a, b] of [['#c7dceb', '#90e0ff'], ['#f5c4b3', '#ff90e8'], ['#cfe7e4', '#7fe6b0'], ['#ece5d8', '#efefef'], ['#1d2430', '#000']]) axo = axo.split(a).join(b);
-const axoBody = axo.replace(/<g transform="translate\(0 230\)">[\s\S]*$/, '');   // без заголовка и легенды листа
+const axoBody = axo;   // только чертёж, без шапки и легенды листа
 const cards = [];
-cards.push(card(1, 7, { h1: 'Скинул Claude Code план из ЖК. Он нарисовал 6 чертежей и проверил площади', h1size: 58,
-  draw: svg([60, 26, 132, 182], axoBody.replace(/<text[^>]*>[^<]*(ПЕРЕКРЫТИЕ|СТЕНЫ|ПОЛ|плита|высота|полезная|КВАРТИРА|01 \/ 06)[^<]*<\/text>/g, '').replace(/<line [^>]*x2="17"[^>]*\/>/g, '')),
-  extra: `<div class="pros"><span class="pro box">6 чертежей</span><span class="pro box">нормы СП 54</span><span class="pro box">≈ 20 минут</span></div>` }));
+// обложка: слева исходный план ЖК, справа аксонометрия из листа /axo
+{
+  const src = pathToFileURL(resolve('out/00-source.png')).href;
+  const axoSvg = svg('auto', axoBody.replace(/<text[^>]*>[^<]*(ПЕРЕКРЫТИЕ|СТЕНЫ|ПОЛ|плита|высота|полезная|КВАРТИРА|01 \/ 06)[^<]*<\/text>/g, '').replace(/<line [^>]*x2="17"[^>]*\/>/g, ''), { name: 1 });
+  const panel = (lab, inner) => `<div style="flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column;align-items:center;gap:10px"><span class="lv" style="background:#fff;color:#000;font-size:24px">${lab}</span><div style="flex:1;min-height:0;width:100%;display:flex;align-items:center;justify-content:center">${inner}</div></div>`;
+  const draw = panel('план из ЖК', `<img src="${src}" style="max-width:100%;max-height:100%;object-fit:contain">`) +
+    `<div style="font-weight:900;font-size:64px;flex:none">→</div>` + panel('что сделал Claude', axoSvg);
+  cards.push(card(1, 7, { h1: 'Скинул Клоду план из ЖК. Он сделал 6 проверок для любого плана', h1size: 58, draw,
+    extra: `<div class="pros"><span class="pro box">6 проверок</span><span class="pro box">нормы СП 54</span><span class="pro box">≈ 20 минут</span></div>` }));
+}
 
 // ---------- 2. площади ----------
 {
   const F = fit([0, 0, 100, 130]);
-  room('Коридор').label_at = [2650, 5300]; room('Санузел').label_at = [1180, 4700]; room('Прихожая').label_at = [1150, 1500];
+  room('Коридор').label_at = [2650, 5300]; room('Санузел').label_at = [1180, 4700]; room('Прихожая').label_at = [872, 2250];
   let s = planLayer(F, { fill: 'zone', labelSize: 6, furniture: false });
   for (const n of ['Коридор', 'Санузел', 'Прихожая']) delete room(n).label_at;
+  // прихожая уже своей подписи: подписываем мельче, чтобы текст не заходил на стены
+  s = s.replace(/(<text[^>]*font-size=")[\d.]+("[^>]*>)(Прихожая|3,25 м²)(<\/text>)/g, '$13.6$2$3$4');
   const ca = `${f1(room('Коридор').area_m2, 2)} м²`;
   s = s.replace(/<text[^>]*>Коридор<\/text>/, '').replace(new RegExp(`<text[^>]*>${ca}</text>`), '');
   { const [cx, cy] = F.T([2640, 4480]); s += `<text x="${cx}" y="${cy}" font-family="Onest" font-size="4.6" font-weight="600" text-anchor="middle" transform="rotate(-90 ${cx} ${cy})">Коридор ${ca}</text>`; }
   const circ = K.areaCheck.circ;
-  cards.push(card(2, 7, { h1: `Площади: ${K.areaCheck.rooms.filter(r => Math.abs(r.diff) <= 0.05).length} из 6 сходятся с подписями`, draw: svg([6, -1, 90, 132], s), rows: [
+  cards.push(card(2, 7, { h1: `Площади: ${K.areaCheck.rooms.filter(r => Math.abs(r.diff) <= 0.05).length} из 6 сходятся с подписями`, draw: svg('auto', s, { name: 2, pad: 1.5 }), rows: [
     row('НОРМА', `Спальня ${f1(room('Спальня').area_m2, 2)} м², на двоих от 10`),
     row('НОРМА', `Комната ${f1(room('Комната').area_m2, 2)} с пилоном, норма от 8`),
     row('ВОПРОС', `Прихожая с коридором: ${f1(circ.area, 2)} против ${f1(circ.label, 1)}`),
@@ -76,14 +95,14 @@ cards.push(card(1, 7, { h1: 'Скинул Claude Code план из ЖК. Он �
 }
 // ---------- 3. непроходные комнаты: пузыри из листа /bubble ----------
 {
-  let b = readFileSync(new URL('../out/06-bubble.svg', import.meta.url), 'utf8').replace(/<svg[^>]*>/, '').replace('</svg>', '');
+  let b = readFileSync(new URL('../out/06-bubble.body.svg', import.meta.url), 'utf8');
   for (const [a, c] of [['#c7dceb', '#90e0ff'], ['#f5c4b3', '#ff90e8'], ['#cfe7e4', '#7fe6b0'], ['#ece5d8', '#efefef'], ['#1d2430', '#000']]) b = b.split(a).join(c);
   b = b.replace(/<g transform="translate\(0 230\)">[\s\S]*$/, '').replace(/<text[^>]*>(КВАРТИРА|06 \/ 06)[^<]*<\/text>/g, '');
   // кадр по реальным кругам (пузыри и ПОДЪЕЗД) с запасом 4 мм
   const cs = [...b.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g)].map(m => m.slice(1).map(Number));
   const bx0 = Math.min(...cs.map(([x, , r]) => x - r)) - 4, bx1 = Math.max(...cs.map(([x, , r]) => x + r)) + 4;
   const by0 = Math.min(...cs.map(([, y, r]) => y - r)) - 4, by1 = Math.max(...cs.map(([, y, r]) => y + r)) + 4;
-  cards.push(card(3, 7, { h1: 'Обе комнаты выходят в коридор', draw: svg([bx0, by0, bx1 - bx0, by1 - by0], b), rows: [
+  cards.push(card(3, 7, { h1: 'Обе комнаты выходят в коридор', draw: svg('auto', b, { name: 3, pad: 4 }), rows: [
     row('НОРМА', 'СП 54 п. 5.6: жилые комнаты непроходные'),
   ] }));
 }
@@ -107,7 +126,7 @@ cards.push(card(1, 7, { h1: 'Скинул Claude Code план из ЖК. Он �
   const A = [np.x - np.nx * np.r, np.y - np.ny * np.r], Bp = [np.x + np.nx * np.l, np.y + np.ny * np.l];
   s += line(F.T(A), F.T(Bp), 'stroke="#d10b5b" stroke-width="1.2"') + T(F.T(np.x > 0 ? [np.x, np.y] : A)[0] + 9, F.T([np.x, np.y])[1] + 1.6, m(np.w), { size: 3.6, fill: '#d10b5b', stroke: 1.2 });
   const vb = (a, b) => { const p = F.T(a), q = F.T(b); return [p[0], p[1], q[0] - p[0], q[1] - p[1]]; };
-  cards.push(card(4, 7, { h1: 'Кровать и кухня: замеры по чертежу', draw: svg(vb([1500, 150], [6350, 3100]), s) + svg(vb([150, 5950], [3300, 9050]), s), rows: [
+  cards.push(card(4, 7, { h1: 'Кровать и кухня: замеры по чертежу', draw: svg(vb([1500, 150], [6350, 3100]), s, { crop: true }) + svg(vb([150, 5950], [3300, 9050]), s, { crop: true }), rows: [
     row('ПРАКТИКА', `Кровать: проходы ${m(bd.left)} и ${m(bd.right)}, надо от 0,55`),
     row('ПРАКТИКА', `Кухня ${m(K.fit.kitchen.long)} × ${m(K.fit.kitchen.short)}, обычно от 2,7 × 2,0`),
     row('ПО ЧЕРТЕЖУ', `Самый узкий проход ${m(np.w)} м, у кухни`),
@@ -125,7 +144,7 @@ cards.push(card(1, 7, { h1: 'Скинул Claude Code план из ЖК. Он �
     else s += T((x0 + x1) / 2, y + 8.6, 'солнца в окнах нет', { size: 6, w: 600, fill: '#555' });
   });
   const a = K.sun[0];
-  cards.push(card(5, 7, { h1: 'Окна на северо-восток: солнце только утром', draw: svg([4, 6, 192, 110], s), rows: [
+  cards.push(card(5, 7, { h1: 'Окна на северо-восток: солнце только утром', draw: svg('auto', s, { name: 5, pad: 3 }), rows: [
     row('ПО ЧЕРТЕЖУ', 'Жёлтым: солнце перед окнами'),
     row('НЕ ПРОВЕРЕНО', 'Соседние дома не учтены'),
     row('ВОПРОС', 'Спросить заключение по инсоляции'),
@@ -137,7 +156,7 @@ cards.push(card(6, 7, { h1: '5 вопросов застройщику по эт
 cards.push(card(7, 7, { h1: 'Это пример. Команды правятся под свой план',
   extra: `<div class="sol box"><div class="step"><b>1</b><span>Кладёшь план квартиры в папку</span></div><div class="step"><b>2</b><span>Пишешь /zones, /flow, /sun и ещё 4 команды</span></div><div class="step"><b>3</b><span>Claude сверяет площади и рисует чертёж кодом</span></div></div>
   <div class="sol box" style="font-size:34px">Размеров на плане ЖК нет, поэтому масштаб считается по площадям комнат. Нормы и практика подписаны, где что.</div>
-  <div class="pros"><span class="pro box">7 команд</span><span class="pro box">без генератора картинок</span><span class="pro box">разбор в Telegram</span></div>` }));
+  <div class="pros"><span class="pro box">7 команд</span><span class="pro box">без генератора картинок</span><span class="pro box">код на GitHub</span></div>` }));
 
 // ---------- рендер ----------
 const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);

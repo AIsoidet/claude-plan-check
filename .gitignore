@@ -9,3 +9,4 @@ src/layers_count.txt
 src/walls_dump.txt
 .env
 out/.t_start
+out/*.body.svg

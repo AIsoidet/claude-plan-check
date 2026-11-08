@@ -93,7 +93,9 @@ export function scaleBar(x, y, k, meters = 3) {
 }
 
 // Лист A4: чертёж сверху, заголовок, подзаголовок, легенда, подвал.
+let LAST_BODY = null;   // сам чертёж листа без шапки и легенды: render() кладёт его рядом как <name>.body.svg
 export function sheet({ num, cmd, title, subtitle, body, legend = '', notes = [] }) {
+  LAST_BODY = body;
   const top = `${text(15, 12, 'КВАРТИРА 48,1 М² · ЕКАТЕРИНБУРГ', { size: 2.3, fill: '#6b7280', ls: .5 })}${text(195, 12, `${num} / 06`, { size: 2.3, fill: '#6b7280', anchor: 'end' })}${line([15, 14], [195, 14], 'stroke="#d0d3d8" stroke-width="0.2"')}`;
   const ty = 218;
   const head = `${line([15, ty - 6], [195, ty - 6], `stroke="${C.ink}" stroke-width="0.35"`)}${text(15, ty, title, { size: 6.4, weight: 700 })}${text(15, ty + 6, subtitle, { size: 3, fill: '#4b5563' })}`;
@@ -109,6 +111,7 @@ export function legendRow(x, y, col, label, value, o = {}) {
 export function render(name, svg, width = 2480) {
   mkdirSync(new URL('../out/', import.meta.url), { recursive: true });
   writeFileSync(new URL(`../out/${name}.svg`, import.meta.url), svg);
+  if (LAST_BODY) { writeFileSync(new URL(`../out/${name}.body.svg`, import.meta.url), LAST_BODY); LAST_BODY = null; }
   const png = new Resvg(svg, { fitTo: { mode: 'width', value: width }, font: { loadSystemFonts: true, defaultFontFamily: FONT } }).render().asPng();
   writeFileSync(new URL(`../out/${name}.png`, import.meta.url), png);
   console.log(`out/${name}.png`);
@@ -127,3 +130,19 @@ export function levelRow(y, lv, t, value) {   // строка легенды: п
   return chip(15, y, lv) + text(39, y, t, { size: 2.6 }) + (value != null ? text(195, y, value, { size: 2.7, weight: 700, anchor: 'end' }) : '');
 }
 export const CHECKS = (() => { try { return JSON.parse(readFileSync(new URL('../out/checks.json', import.meta.url), 'utf8')); } catch { return null; } })();
+
+// Рамка содержимого SVG-фрагмента (полигоны, линии, круги, прямоугольники, текст без поворота, пути без дуг).
+export function bboxOf(svg) {
+  const xs = [], ys = [], add = (x, y) => { if (Number.isFinite(x) && Number.isFinite(y)) { xs.push(x); ys.push(y); } };
+  for (const m of svg.matchAll(/points="([^"]+)"/g)) { const v = m[1].trim().split(/[\s,]+/).map(Number); for (let i = 0; i + 1 < v.length; i += 2) add(v[i], v[i + 1]); }
+  for (const m of svg.matchAll(/<line x1="([-\d.]+)" y1="([-\d.]+)" x2="([-\d.]+)" y2="([-\d.]+)"/g)) { add(+m[1], +m[2]); add(+m[3], +m[4]); }
+  for (const m of svg.matchAll(/<circle cx="([-\d.]+)" cy="([-\d.]+)" r="([-\d.]+)"/g)) { add(+m[1] - +m[3], +m[2] - +m[3]); add(+m[1] + +m[3], +m[2] + +m[3]); }
+  for (const m of svg.matchAll(/<rect x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/g)) { add(+m[1], +m[2]); add(+m[1] + +m[3], +m[2] + +m[4]); }
+  for (const m of svg.matchAll(/<path d="([^"]+)"/g)) { if (/[Aa]/.test(m[1])) continue; const v = m[1].match(/-?\d+\.?\d*/g)?.map(Number) || []; for (let i = 0; i + 1 < v.length; i += 2) add(v[i], v[i + 1]); }
+  for (const m of svg.matchAll(/<text x="([-\d.]+)" y="([-\d.]+)"([^>]*)>([^<]*)<\/text>/g)) {
+    if (/rotate\(/.test(m[3])) continue;
+    const size = +(m[3].match(/font-size="([\d.]+)"/)?.[1] || 3), w = m[4].length * size * 0.56, anchor = m[3].match(/text-anchor="(\w+)"/)?.[1] || 'start', x = +m[1], y = +m[2];
+    const x0 = anchor === 'middle' ? x - w / 2 : anchor === 'end' ? x - w : x; add(x0, y - size); add(x0 + w, y + size * 0.3);
+  }
+  return xs.length ? [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] : null;
+}
